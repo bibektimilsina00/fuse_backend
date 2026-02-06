@@ -42,9 +42,11 @@ class NodeRegistry:
             packages_dir = current_file.parent.parent.parent.parent.parent / "node_packages"
         
         logger.info(f"Initializing NodeRegistry from: {packages_dir}")
+        print(f"DEBUG: NodeRegistry initializing from: {packages_dir}", flush=True)
         cls._loader = initialize_node_loader(packages_dir)
         cls._initialized = True
         logger.info(f"NodeRegistry initialized with {len(cls._loader.loaded_nodes)} nodes")
+        print(f"DEBUG: NodeRegistry initialized with {len(cls._loader.loaded_nodes)} nodes", flush=True)
     
     @classmethod
     def get_node(cls, node_type: str) -> Optional[NodePackage]:
@@ -91,7 +93,8 @@ class NodeRegistry:
         node_id: str,
         config: Dict[str, Any],
         inputs: Dict[str, Any],
-        credentials: Optional[Dict[str, Any]] = None
+        credentials: Optional[Dict[str, Any]] = None,
+        context: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
         Execute a node.
@@ -101,12 +104,13 @@ class NodeRegistry:
             config: Node configuration
             inputs: Input data from previous nodes
             credentials: Optional credentials
+            context: Optional full NodeContext object
             
         Returns:
             Node outputs
         """
         cls._ensure_initialized()
-        return await cls._loader.execute_node(node_id, config, inputs, credentials)
+        return await cls._loader.execute_node(node_id, config, inputs, credentials, context)
     
     @classmethod
     def reload_node(cls, node_id: str) -> bool:

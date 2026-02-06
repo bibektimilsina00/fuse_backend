@@ -4,7 +4,10 @@ from fuse.auth.schemas import UserCreate
 from fuse.config import settings
 from sqlmodel import Session, create_engine, select
 
-engine = create_engine(str(settings.SQLALCHEMY_DATABASE_URI))
+engine = create_engine(
+    str(settings.SQLALCHEMY_DATABASE_URI),
+    connect_args={"check_same_thread": False} if "sqlite" in str(settings.SQLALCHEMY_DATABASE_URI) else {}
+)
 
 
 # make sure all SQLModel models are imported (app.models) before initializing DB

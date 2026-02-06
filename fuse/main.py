@@ -30,6 +30,23 @@ app = FastAPI(
     generate_unique_id_function=custom_generate_unique_id,
 )
 
+@app.on_event("startup")
+async def startup_event():
+    """Start periodic background tasks."""
+    from fuse.workflows.engine.periodic_scheduler import check_scheduled_workflows
+    import asyncio
+    
+    async def schedule_loop():
+        while True:
+            try:
+                await check_scheduled_workflows()
+            except Exception as e:
+                logger.error(f"Error in schedule loop: {e}")
+            await asyncio.sleep(15) # Check every 15 seconds
+            
+    asyncio.create_task(schedule_loop())
+    logger.info("Started periodic workflow scheduler background task")
+
 
 # Log validation errors for debugging
 @app.exception_handler(RequestValidationError)
@@ -93,21 +110,37 @@ if static_dir.exists():
         if full_path.startswith("api/"):
             return JSONResponse(status_code=404, content={"detail": "Not found"})
         
-        # Try to serve the exact file if it exists (for static pages like /auth/login.html)
+        # 1. Try to serve the exact file (e.g. /_next/static/...)
         requested_file = static_dir / full_path
         if requested_file.is_file():
             return FileResponse(requested_file)
         
-        # For directories, try index.html inside
+        # 2. Try adding .html (Next.js export some pages as file.html)
+        html_file = static_dir / f"{full_path.rstrip('/')}.html"
+        if html_file.is_file():
+            return FileResponse(html_file)
+
+        # 3. For directories, try index.html inside (trailing-slash: true)
         if requested_file.is_dir():
             dir_index = requested_file / "index.html"
             if dir_index.exists():
                 return FileResponse(dir_index)
+        
+        # 4. Handle dynamic route fallbacks (Workflows, Nodes, Plugins)
+        # These typically fall back to the root index.html in a clean SPA export,
+        # or can be mapped to their specific placeholders.
+        if full_path.startswith("workflows/") or \
+           full_path.startswith("nodes/") or \
+           full_path.startswith("plugins/"):
+            # For Next.js static exports, the root index.html often handles all client-side routing
+            if index_file.exists():
+                return FileResponse(index_file)
 
-        # Serve index.html for SPA routing (fallback)
+        # 5. Global SPA Fallback
         if index_file.exists():
             return FileResponse(index_file)
-        return JSONResponse(status_code=404, content={"detail": "Frontend not built. Run 'scripts/build_frontend.sh' first."})
+            
+        return JSONResponse(status_code=404, content={"detail": "Frontend not built. Run 'npm run build' in fuse_frontend first."})
 
 else:
     logger.warning(f"Static frontend directory not found at: {static_dir}")

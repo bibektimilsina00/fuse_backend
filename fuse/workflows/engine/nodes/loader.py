@@ -186,7 +186,8 @@ class NodePackageLoader:
         node_id: str,
         config: Dict[str, Any],
         inputs: Dict[str, Any],
-        credentials: Optional[Dict[str, Any]] = None
+        credentials: Optional[Dict[str, Any]] = None,
+        context: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
         Execute a loaded node package with the given configuration.
@@ -196,13 +197,10 @@ class NodePackageLoader:
             config: Node configuration (url, method, etc.)
             inputs: Runtime input data from previous nodes
             credentials: Optional credentials for the node
+            context: Full NodeContext object (optional)
             
         Returns:
             Dict with node outputs
-            
-        Raises:
-            ValueError: If node not found or validation fails
-            RuntimeError: If execution fails
         """
         node_package = self.loaded_nodes.get(node_id)
         if not node_package:
@@ -215,16 +213,17 @@ class NodePackageLoader:
                 errors = validation_result.get("errors", ["Validation failed"])
                 raise ValueError(f"Configuration validation failed: {', '.join(errors)}")
         
-        # Build execution context
-        context = {
-            "config": config,
-            "inputs": inputs,
-            "credentials": credentials,
-            "node": {
-                "id": node_package.id,
-                "version": node_package.version
+        # Build execution context if not provided
+        if context is None:
+            context = {
+                "config": config,
+                "inputs": inputs,
+                "credentials": credentials,
+                "node": {
+                    "id": node_package.id,
+                    "version": node_package.version
+                }
             }
-        }
         
         # Execute the node
         try:

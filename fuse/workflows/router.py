@@ -2,12 +2,13 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
-from pydantic import BaseModel
+
 from fuse.auth.dependencies import CurrentUser, SessionDep
 from fuse.utils.cache import CacheTTL, cache
 from fuse.workflows.code_execution import router as code_execution_router
@@ -40,14 +41,16 @@ def execute_workflow(
     *,
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID,
+    id: str,
     trigger_data: Dict[str, Any] = {},
+    background_tasks: BackgroundTasks = None,
 ) -> Any:
-    """
-    Execute a workflow immediately (test run).
-    Creates an execution record and dispatches to Celery worker.
-    """
-    workflow = workflow_service.get_workflow(session=session, workflow_id=id)
+    try:
+        workflow_uuid = uuid.UUID(id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+    
+    workflow = workflow_service.get_workflow(session=session, workflow_id=workflow_uuid)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
@@ -55,18 +58,69 @@ def execute_workflow(
 
     # Create execution record first so we can return the ID immediately
     execution = WorkflowExecution(
-        workflow_id=id, status="pending", trigger_data=str(trigger_data)
+        workflow_id=workflow_uuid, status="pending", trigger_data=str(trigger_data)
     )
     session.add(execution)
     session.commit()
     session.refresh(execution)
 
-    # Dispatch to Celery worker with execution ID
+    # Local In-Process Execution
     from fuse.workflows.engine import execute_workflow as execute_workflow_task
+    
+    # Mark as manual execution to allow engine to skip triggers if needed
+    trigger_data = dict(trigger_data)
+    trigger_data["__manual"] = True
+    
+    async def safe_execute():
+        try:
+            await execute_workflow_task(str(workflow_uuid), trigger_data, str(execution.id))
+        except Exception as e:
+            logger.exception(f"Fatal error during workflow execution start: {e}")
+            # Try to mark the whole execution as failed if it hasn't started any nodes
+            with Session(db_engine) as session_fail:
+                exec_rec = session_fail.get(WorkflowExecution, execution.id)
+                if exec_rec and exec_rec.status not in ["completed", "failed"]:
+                    exec_rec.status = "failed"
+                    exec_rec.error = f"Initialization error: {str(e)}"
+                    session_fail.add(exec_rec)
+                    session_fail.commit()
 
-    execute_workflow_task.delay(str(id), trigger_data, str(execution.id))
+    logger.info(f"Triggering Local Execution for workflow {workflow_uuid}")
+    if background_tasks:
+        background_tasks.add_task(safe_execute)
+    else:
+        # Fallback to direct task creation
+        asyncio.create_task(safe_execute())
 
     return execution
+
+
+@router.websocket("/ws/{execution_id}")
+async def websocket_endpoint(websocket: WebSocket, execution_id: str):
+    await websocket.accept()
+    logger.debug(f"WebSocket connected (Execution: {execution_id}, Mode: Memory)")
+    
+    # Send an initial message to confirm connection
+    await websocket.send_json({
+        "type": "info", 
+        "timestamp": str(datetime.utcnow()),
+        "data": {"message": "Connected to local log stream"}
+    })
+
+    # Memory PubSub Mode
+    from fuse.utils.memory_pubsub import memory_pubsub
+    channel = f"workflow:execution:{execution_id}"
+    queue = await memory_pubsub.subscribe(channel)
+    logger.debug(f"Subscribed to Memory channel: {channel}")
+    
+    try:
+        while True:
+            message = await queue.get()
+            await websocket.send_text(message)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await memory_pubsub.unsubscribe(channel, queue)
 
 
 @router.get("/executions/{id}", response_model=WorkflowExecutionPublic)
@@ -83,9 +137,6 @@ def get_execution(
     if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
 
-    # Check permissions (via workflow owner)
-    # This requires joining or fetching workflow.
-    # execution.workflow is loaded lazy usually, but let's check.
     if execution.workflow.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -122,14 +173,19 @@ def read_new_workflow():
 
 @router.get("/{id}", response_model=WorkflowPublic)
 def read_workflow(
-    id: uuid.UUID,
+    id: str,
     session: SessionDep,
     current_user: CurrentUser,
 ) -> Any:
     """
     Get workflow by ID.
     """
-    workflow = workflow_service.get_workflow(session=session, workflow_id=id)
+    try:
+        workflow_id = uuid.UUID(id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+
+    workflow = workflow_service.get_workflow(session=session, workflow_id=workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
@@ -159,13 +215,18 @@ def update_workflow(
     *,
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID,
+    id: str,
     workflow_in: WorkflowUpdate,
 ) -> Any:
     """
     Update a workflow.
     """
-    workflow = workflow_service.get_workflow(session=session, workflow_id=id)
+    try:
+        workflow_id = uuid.UUID(id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+
+    workflow = workflow_service.get_workflow(session=session, workflow_id=workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
@@ -182,18 +243,23 @@ def delete_workflow(
     *,
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID,
+    id: str,
 ) -> Any:
     """
     Delete a workflow.
     """
-    workflow = workflow_service.get_workflow(session=session, workflow_id=id)
+    try:
+        workflow_id = uuid.UUID(id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+
+    workflow = workflow_service.get_workflow(session=session, workflow_id=workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    workflow_service.delete_workflow(session=session, workflow_id=id)
+    workflow_service.delete_workflow(session=session, workflow_id=workflow_id)
     return Message(message="Workflow deleted successfully")
 
 
@@ -202,22 +268,19 @@ def activate_workflow(
     *,
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID,
+    id: str,
 ) -> Any:
-    """
-    Activate a workflow to start listening for triggers.
-    When active:
-    - Schedule triggers will fire on their configured intervals
-    - Webhook triggers will respond to incoming requests
-    - Email/form triggers will listen for events
-    """
-    workflow = workflow_service.get_workflow(session=session, workflow_id=id)
+    try:
+        workflow_id = uuid.UUID(id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+
+    workflow = workflow_service.get_workflow(session=session, workflow_id=workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    # Update status to active
     workflow.status = "active"
     workflow.updated_at = datetime.utcnow()
     session.add(workflow)
@@ -232,19 +295,19 @@ def deactivate_workflow(
     *,
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID,
+    id: str,
 ) -> Any:
-    """
-    Deactivate a workflow to stop listening for triggers.
-    The workflow can still be executed manually via the Execute button.
-    """
-    workflow = workflow_service.get_workflow(session=session, workflow_id=id)
+    try:
+        workflow_id = uuid.UUID(id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+
+    workflow = workflow_service.get_workflow(session=session, workflow_id=workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    # Update status to inactive
     workflow.status = "inactive"
     workflow.updated_at = datetime.utcnow()
     session.add(workflow)
@@ -259,20 +322,36 @@ def save_workflow_nodes(
     *,
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID,
+    id: str,
     save_request: WorkflowSaveRequest,
 ) -> Any:
     """
     Save workflow nodes and edges.
     """
-    workflow = workflow_service.get_workflow(session=session, workflow_id=id)
+    if id == "new":
+        workflow_in = WorkflowCreate(
+            name=save_request.meta.name or "Untitled Workflow",
+            description=save_request.meta.description,
+            status=save_request.meta.status or "draft",
+        )
+        workflow = workflow_service.create_workflow(
+            session=session, workflow_in=workflow_in, owner_id=current_user.id
+        )
+        workflow_id = workflow.id
+    else:
+        try:
+            workflow_id = uuid.UUID(id)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+
+    workflow = workflow_service.get_workflow(session=session, workflow_id=workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
     workflow = workflow_service.save_workflow_nodes(
-        session=session, workflow_id=id, save_request=save_request
+        session=session, workflow_id=workflow_id, save_request=save_request
     )
     return workflow_service.workflow_to_public(workflow)
 
@@ -284,7 +363,6 @@ def _get_node_types_cached() -> List[Dict[str, Any]]:
     from fuse.workflows.engine.nodes.registry import NodeRegistry
 
     schemas = NodeRegistry.get_all_schemas()
-    # New registry returns dicts, not Pydantic models
     return [s if isinstance(s, dict) else s.model_dump() for s in schemas]
 
 
@@ -317,13 +395,10 @@ async def get_node_options(
 
     node_pkg = NodeRegistry.get_node(request.node_type)
     if not node_pkg:
-        logger.debug(f"Unknown node type {request.node_type}")
         raise HTTPException(
             status_code=400, detail=f"Unknown node type: {request.node_type}"
         )
 
-    # In new system, helper functions are in the same module as execute()
-    # We can access them via the function's globals (module namespace)
     method_name = request.method_name
     execute_fn = node_pkg.execute_fn
     
@@ -345,7 +420,6 @@ async def get_node_options(
             status_code=400, detail=f"Attribute {method_name} is not callable"
         )
 
-    # Construct minimal context if needed, mostly for logging or user ID
     context = {"user_id": str(current_user.id)}
 
     try:
@@ -364,7 +438,6 @@ async def trigger_webhook(
 ) -> TriggerWebhookResponse:
     """
     Trigger a workflow via webhook.
-    Only works if the workflow is active.
     """
     workflow = await run_in_threadpool(
         workflow_service.get_workflow_with_nodes,
@@ -374,16 +447,13 @@ async def trigger_webhook(
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    # Only active workflows respond to webhook triggers
     if workflow.status != "active":
         raise HTTPException(
             status_code=400,
             detail="Workflow is not active. Activate it to enable webhook triggers.",
         )
 
-    # Check if workflow has a webhook trigger
     import json
-
     nodes = workflow.nodes
     webhook_node = None
     for node in nodes:
@@ -396,7 +466,6 @@ async def trigger_webhook(
             status_code=400, detail="Workflow does not have a webhook trigger"
         )
 
-    # Parse request data
     body = (
         await request.json()
         if request.headers.get("content-type") == "application/json"
@@ -420,10 +489,8 @@ async def trigger_webhook(
         "timestamp": str(datetime.utcnow()),
     }
 
-    # Execute workflow
     from fuse.workflows.engine import execute_workflow as execute_workflow_task
 
-    # Create execution record
     execution = WorkflowExecution(
         workflow_id=workflow_id, status="pending", trigger_data=json.dumps(trigger_data)
     )
@@ -431,14 +498,13 @@ async def trigger_webhook(
     session.commit()
     session.refresh(execution)
 
-    task = execute_workflow_task.delay(
-        str(workflow_id), trigger_data, str(execution.id)
-    )
+    # Local Background Task
+    asyncio.create_task(execute_workflow_task(str(workflow_id), trigger_data, str(execution.id)))
 
     return TriggerWebhookResponse(
         execution_id=execution.id,
         status="pending",
-        message="Webhook received and workflow triggered",
+        message="Webhook received and workflow triggered locally",
     )
 
 
@@ -447,30 +513,32 @@ async def execute_node(
     *,
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID,
+    id: str,
     node_id: str,
     request: ExecuteNodeRequest,
 ) -> ExecuteNodeResponse:
     """
     Execute a single node for testing purposes.
-    Does not trigger downstream nodes or persist execution state.
     """
+    try:
+        workflow_id = uuid.UUID(id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid workflow ID: {id}")
+
     workflow = await run_in_threadpool(
-        workflow_service.get_workflow_with_nodes, session=session, workflow_id=id
+        workflow_service.get_workflow_with_nodes, session=session, workflow_id=workflow_id
     )
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    # Find node
     node = next((n for n in workflow.nodes if n.node_id == node_id), None)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
     from fuse.workflows.engine.nodes.registry import NodeRegistry
 
-    # Verify node type exists
     node_pkg = NodeRegistry.get_node(node.node_type)
     if not node_pkg:
         raise HTTPException(
@@ -481,7 +549,6 @@ async def execute_node(
     config_override = request.config
 
     try:
-        # Use config override if provided, otherwise fallback to DB spec
         node_config = (
             config_override
             if config_override is not None
@@ -492,16 +559,11 @@ async def execute_node(
             )
         )
 
-        logger.debug(f"Executing node {node_id}")
-        logger.debug(f"Input: {input_data}")
-        logger.debug(f"Config: {node_config}")
-
-        # Execute node logic
         result = await NodeRegistry.execute_node(
             node_id=node.node_type,
             config=node_config,
             inputs=input_data,
-            credentials=None  # Test execution might need credential lookup logic if we supported it
+            credentials=None
         )
         
         return ExecuteNodeResponse(
@@ -517,7 +579,6 @@ async def execute_node(
 @router.get("/debug/workflows")
 def list_debug_workflows():
     import os
-
     dummy_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "dummy_json"
     )
@@ -531,7 +592,6 @@ def list_debug_workflows():
 def get_debug_workflow(filename: str):
     import json
     import os
-
     dummy_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "dummy_json"
     )
@@ -540,28 +600,3 @@ def get_debug_workflow(filename: str):
         raise HTTPException(status_code=404, detail="Workflow not found")
     with open(file_path, "r") as f:
         return json.load(f)
-
-
-from fastapi import WebSocket, WebSocketDisconnect
-from fuse.utils.redis_client import async_redis_client
-
-
-@router.websocket("/ws/{execution_id}")
-async def websocket_endpoint(websocket: WebSocket, execution_id: str):
-    await websocket.accept()
-
-    pubsub = async_redis_client.pubsub()
-    channel = f"workflow:execution:{execution_id}"
-    await pubsub.subscribe(channel)
-
-    try:
-        while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True)
-            if message:
-                await websocket.send_text(message["data"])
-            await asyncio.sleep(0.1)
-    except WebSocketDisconnect:
-        await pubsub.unsubscribe(channel)
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        await pubsub.unsubscribe(channel)

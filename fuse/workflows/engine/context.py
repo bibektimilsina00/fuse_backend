@@ -22,11 +22,28 @@ class NodeContext:
         edges: List[Any] = None,
         env: Dict[str, str] = None
     ):
+        from fuse.workflows.engine.definitions import WorkflowItem
+        
         self.execution_id = execution_id
         self.workflow_id = workflow_id
         self.node_id = node_id
         self.raw_config = config
-        self.input_data = input_data
+        
+        # Ensure input_data is a list of WorkflowItems (V2 standard)
+        if input_data is None:
+            self.input_data = []
+        elif isinstance(input_data, dict):
+            # Compatibility: Wrap V1 dict into V2 WorkflowItem
+            self.input_data = [WorkflowItem(json=input_data)]
+        elif isinstance(input_data, list):
+            # Already a list, but might be dicts or items
+            self.input_data = [
+                item if isinstance(item, WorkflowItem) else WorkflowItem(json=item)
+                for item in input_data
+            ]
+        else:
+            self.input_data = input_data
+            
         self.results_map = results_map
         self.edges = edges or []
         

@@ -26,7 +26,6 @@ class WorkflowScheduler:
             self.logger.log_workflow_start()
 
             # Rule 4 & 6: Validate DAG Structure before execution
-            # This prevents infinite loops in malformed workflows
             try:
                 WorkflowGraph.get_execution_order(workflow.nodes, workflow.edges)
             except ValueError as e:
@@ -41,8 +40,30 @@ class WorkflowScheduler:
                 self.state.update_execution_status(session, "failed")
                 return
 
+            is_manual = trigger_data.get("__manual", False) if trigger_data else False
+            
             for node in start_nodes:
-                self.schedule_node(node.node_id, trigger_data)
+                # If it's a manual run, we often want to skip the trigger node and start from its children
+                # This is especially true for webhook.receive or schedule.cron nodes
+                if is_manual and (node.node_type.startswith("webhook") or \
+                                 node.node_type.startswith("schedule") or \
+                                 node.node_type.endswith(".receive") or \
+                                 node.node_type == "trigger"):
+                    logger.info(f"Manual Run: Skipping trigger node {node.node_id} ({node.node_type}) and starting children.")
+                    
+                    # Find all edges originating from this trigger
+                    outgoing_edges = [e for e in workflow.edges if e.source == node.node_id]
+                    if not outgoing_edges:
+                        logger.warning(f"Trigger node {node.node_id} has no children to start.")
+                        # If no children, we might as well run the trigger itself to show it finished
+                        self.schedule_node(node.node_id, trigger_data)
+                    else:
+                        # Schedule all direct children
+                        for edge in outgoing_edges:
+                            logger.info(f"Manual Run: Scheduling child {edge.target} of skipped trigger.")
+                            self.schedule_node(edge.target, trigger_data)
+                else:
+                    self.schedule_node(node.node_id, trigger_data)
 
     def schedule_node(self, node_id: str, input_data: Any):
         """Schedule a node for execution."""

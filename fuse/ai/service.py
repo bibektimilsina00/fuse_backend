@@ -18,41 +18,9 @@ import fuse.workflows.engine.nodes  # noqa
 # No longer importing WorkflowNodePublic, WorkflowEdgePublic, NodeData as we use V2 structure in response parsing
 from fuse.workflows.engine.nodes.registry import NodeRegistry
 
-# Constants for decoupled plugin integration
-CLIPROXY_URL = "http://127.0.0.1:8317"
-CLIPROXY_API_KEY = "fuse-local-dev-key"
-
-FUSE_SYSTEM_PROMPT = """You are Fuse AI, the intelligent backbone and persona of the Fuse automation platform. 
-Fuse is a powerful "AI-first" local-first workflow automation platform created by Bibek Timilsina. It is designed to bridge the gap between complex AI capabilities and real-world business processes through a beautiful, intuitive visual interface.
-
-Core Vision:
-- Universal Automation: Connect any app, API, or service with drag-and-drop ease.
-- AI-Native: Deep integration with the world's most powerful LLMs (Gemini, Claude, GPT) to build intelligent "agentic" workflows.
-- Local First / Hybrid: Run locally for speed and privacy, while scaling to the cloud when needed.
-
-Technical Architecture Details for Context:
-- Backend: High-performance Python 3.10+ using FastAPI and SQLModel.
-- Frontend: State-of-the-art Next.js (TypeScript) with React Flow for the visual graph builder.
-- Task Orchestration: Robust distributed processing via Celery and Redis.
-- AI Gateway: A unified AI provider system supporting:
-    • Google AI (Gemini 1.5/2.0/3.0)
-    • Anthropic (Claude 3.5/4.5)
-    • OpenAI (GPT-4o/o1/o3)
-    • GitHub Copilot Models
-- CLIProxyAPI (Antigravity): Our proprietary internal proxy that handles complex OAuth flows and gives users access to "managed" high-tier models (like Claude Sonnet 4.5 and Gemini Pro 3) using their existing Google subscriptions.
-
-Your Mission:
-1. Expert Guidance: Help users build, debug, and optimize their Fuse workflows.
-2. Logic Architect: Provide deep insights into automation patterns, database designs, and error-handling strategies.
-3. Integration Specialist: Help with API documentation, JSON parsing, and HTTP request configurations.
-4. AI Prompt Engineer: Assist users in writing better prompts for their LLM nodes within workflows.
-
-Conversation Rules:
-- Identify as "Fuse AI".
-- Be concise, technical where appropriate, but always helpful and encouraging.
-- Speak with the authority of the platform's core developer companion.
-- Your ultimate goal is to make automation accessible to everyone while maintaining power for developers.
-"""
+from fuse.ai.prompts import FUSE_SYSTEM_PROMPT, WORKFLOW_GENERATION_PROMPT_TEMPLATE
+from fuse.ai.models import get_available_models, get_provider_from_credential
+from fuse.plugins.registry import plugin_registry
 
 
 class AIWorkflowService:
@@ -88,257 +56,15 @@ class AIWorkflowService:
                 },
             )
 
-    async def _is_proxy_running(self) -> bool:
-        """Check if CLIProxyAPI is running by hitting its root endpoint."""
-        try:
-            async with httpx.AsyncClient(timeout=1.0) as client:
-                resp = await client.get(f"{CLIPROXY_URL}/")
-                return resp.status_code == 200
-        except Exception:
-            return False
+        # Initialize plugins
+        if not plugin_registry.plugins:
+            plugin_registry.initialize()
 
     async def get_available_models(
         self, credential_data: Dict[str, Any]
     ) -> List[Dict[str, str]]:
         """Fetch available models for the given credential."""
-        provider = (
-            credential_data.get("provider") or credential_data.get("type", "unknown")
-        ).lower()
-        if provider == "ai_provider":
-            provider = (
-                credential_data.get("data", {}).get("provider", "unknown").lower()
-            )
-
-        models = []
-
-        # Google AI
-        if provider == "gemini" or provider == "google_ai":
-            # Use genai to list models
-            cred_data = credential_data.get("data", {})
-            api_key = cred_data.get("api_key")
-            access_token = cred_data.get("access_token")
-            project_id = cred_data.get("project_id")
-
-            if project_id and access_token:
-                # CLIProxyAPI Mode - Models available through CLIProxyAPI
-                # These are the models registered by Antigravity OAuth login
-                try:
-                    if await self._is_proxy_running():
-                        
-                        async with httpx.AsyncClient(timeout=5.0) as client:
-                            resp = await client.get(f"{CLIPROXY_URL}/v1/models")
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                # Handle OpenAI-compatible response { "data": [...] }
-                                model_list = data.get("data", []) if isinstance(data, dict) else data
-                                
-                                dynamic_models = []
-                                for m in model_list:
-                                    mid = m.get("id")
-                                    if mid:
-                                        # Determine provider label based on ID/owner
-                                        model_provider = "google"
-                                        if "claude" in mid:
-                                            model_provider = "anthropic"
-                                        elif "gpt" in mid:
-                                            model_provider = "openai"
-                                            
-                                        dynamic_models.append({
-                                            "id": mid,
-                                            "label": mid, # The ID is usually descriptive enough e.g. gemini-2.0-flash
-                                            "provider": model_provider,
-                                            "description": f"Managed via Antigravity" 
-                                        })
-                                
-                                if dynamic_models:
-                                    return dynamic_models
-                except Exception as e:
-                    logger.warning(f"Failed to fetch dynamic models from CLIProxy: {e}")
-
-                # Fallback to static list if dynamic fetch fails
-                return [
-                    {
-                        "id": "gemini-3-pro-preview",
-                        "label": "Gemini 3 Pro",
-                        "provider": "google",
-                    },
-                    {
-                        "id": "gemini-3-flash-preview",
-                        "label": "Gemini 3 Flash",
-                        "provider": "google",
-                    },
-                    {
-                        "id": "gemini-2.5-flash",
-                        "label": "Gemini 2.5 Flash",
-                        "provider": "google",
-                    },
-                    {
-                        "id": "claude-sonnet-4-5",
-                        "label": "Claude Sonnet 4.5",
-                        "provider": "anthropic",
-                    },
-                    {
-                        "id": "claude-sonnet-4-5-thinking",
-                        "label": "Claude Sonnet 4.5 Thinking",
-                        "provider": "anthropic",
-                    },
-                    {
-                        "id": "claude-opus-4-5-thinking",
-                        "label": "Claude Opus 4.5 Thinking",
-                        "provider": "anthropic",
-                    },
-                    {
-                        "id": "gpt-oss-120b-medium",
-                        "label": "GPT-OSS 120B Medium",
-                        "provider": "openai",
-                    },
-                ]
-
-            try:
-                # Standard listing with API Key
-                if api_key:
-                    client = genai.Client(api_key=api_key)
-                    # list_models returns an iterator
-                    for m in client.models.list_models():
-                        if "generateContent" in m.supported_generation_methods:
-                            models.append(
-                                {
-                                    "id": m.name.replace("models/", ""),
-                                    "label": m.display_name,
-                                    "provider": "google",
-                                }
-                            )
-                else:
-                    # Fallback for OAuth - Use public listing or hardcoded if scope issues
-                    # We try REST API
-                    async with httpx.AsyncClient() as client:
-                        headers = {}
-                        if access_token:
-                            headers["Authorization"] = f"Bearer {access_token}"
-                        elif api_key:
-                            headers["x-goog-api-key"] = api_key
-
-                        # Note: v1beta/models usually works public, but let's try
-                        resp = await client.get(
-                            "https://generativelanguage.googleapis.com/v1beta/models",
-                            headers=headers,
-                        )
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            for m in data.get("models", []):
-                                if "generateContent" in m.get(
-                                    "supportedGenerationMethods", []
-                                ):
-                                    name = m["name"].replace("models/", "")
-                                    models.append(
-                                        {
-                                            "id": name,
-                                            "label": m.get("displayName", name),
-                                            "provider": "google",
-                                        }
-                                    )
-            except Exception as e:
-                logger.error(f"Failed to fetch Google models: {e}")
-                # Fallback list
-                return [
-                    {
-                        "id": "gemini-2.0-flash-exp",
-                        "label": "Gemini 2.0 Flash (Exp)",
-                        "provider": "google",
-                    },
-                    {
-                        "id": "gemini-1.5-pro-latest",
-                        "label": "Gemini 1.5 Pro",
-                        "provider": "google",
-                    },
-                    {
-                        "id": "gemini-1.5-flash-latest",
-                        "label": "Gemini 1.5 Flash",
-                        "provider": "google",
-                    },
-                ]
-
-        # GitHub Copilot
-        elif provider == "github_copilot":
-            # Try to fetch dynamically
-            copilot_token = credential_data.get("data", {}).get("copilot_token")
-            if copilot_token:
-                try:
-                    async with httpx.AsyncClient() as client:
-                        resp = await client.get(
-                            "https://api.githubcopilot.com/models",
-                            headers={
-                                "Authorization": f"Bearer {copilot_token}",
-                                "Editor-Version": "vscode/1.85.0",
-                                "User-Agent": "GitHubCopilot/1.138.0",
-                            },
-                            timeout=5.0,
-                        )
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            # Expecting OpenAI-format: {"data": [{"id": "gpt-4", ...}]}
-                            dynamic_models = []
-                            for m in data.get("data", []):
-                                # specific filter? or just take all
-                                dynamic_models.append(
-                                    {
-                                        "id": m["id"],
-                                        "label": f"{m.get('id')} (Copilot)",
-                                        "provider": "copilot",
-                                    }
-                                )
-
-                            if dynamic_models:
-                                return dynamic_models
-                        else:
-                            logger.warning(
-                                f"Copilot models fetch failed {resp.status_code}: {resp.text}"
-                            )
-                except Exception as e:
-                    logger.warning(f"Failed to fetch dynamic Copilot models: {e}")
-
-            # Fallback
-            return [
-                {"id": "gpt-4", "label": "GPT-4 (Copilot)", "provider": "copilot"},
-                {
-                    "id": "gpt-3.5-turbo",
-                    "label": "GPT-3.5 Turbo (Copilot)",
-                    "provider": "copilot",
-                },
-            ]
-
-        # OpenRouter / OpenAI
-        elif provider == "openrouter":
-            try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get("https://openrouter.ai/api/v1/models")
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        for m in data.get("data", []):
-                            models.append(
-                                {
-                                    "id": m["id"],
-                                    "label": m.get("name", m["id"]),
-                                    "provider": "openrouter",
-                                }
-                            )
-                        return models
-            except Exception:
-                pass
-
-        # Generic Fallback
-        if not models:
-            models = [
-                {"id": "gpt-4o", "label": "GPT-4o", "provider": "openai"},
-                {"id": "gpt-4o-mini", "label": "GPT-4o Mini", "provider": "openai"},
-                {
-                    "id": "claude-3-5-sonnet-20240620",
-                    "label": "Claude 3.5 Sonnet",
-                    "provider": "anthropic",
-                },
-            ]
-
-        return models
+        return await get_available_models(credential_data)
 
     async def generate_workflow_from_prompt(
         self,
@@ -349,73 +75,106 @@ class AIWorkflowService:
         credential_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Generate workflow nodes and edges from natural language prompt"""
-        system_prompt = self._get_system_prompt(current_nodes, current_edges)
+        
+        # Retrieve only relevant schemas using RAG Service
+        # This handles vector search or advanced keyword matching
+        from fuse.ai.rag.manager import NodeRAGService
+        relevant_schemas = await NodeRAGService.get_instance().retrieve_relevant_nodes(prompt)
+        
+        system_prompt = self._get_system_prompt(current_nodes, current_edges, schemas=relevant_schemas)
         user_prompt = f"USER REQUEST: {prompt}\n\nPlease generate a workflow JSON based on this request."
 
-        # Override model provider if credential specifies one
-        provider = model
-        if credential_data:
-            # Extract provider from credential type
-            cred_type = credential_data.get("type", "").lower()
-            cred_provider = credential_data.get("provider", "").lower()
-            
-            # github_copilot, google_ai, etc.
-            if cred_type in ["github_copilot", "google_ai", "gemini"]:
-                provider = cred_type
-            elif cred_provider:
-                provider = cred_provider
-            
-            logger.info(f"Using credential provider: {provider} (type={cred_type})")
+        # Determine provider and model from inputs
+        provider = "openrouter"
+        model_name = model
         
-        # Strip provider prefix from model if present (e.g., "openai/gpt-4" -> "gpt-4")
+        # If model string contains provider prefix (e.g. "openai/gpt-4"), extract it
         if "/" in model:
-            model = model.split("/")[-1]
+            parts = model.split("/", 1)
+            provider_candidate = parts[0].lower()
+            if provider_candidate in ["openai", "anthropic", "google", "gemini", "copilot", "github_copilot", "openrouter"]:
+                provider = provider_candidate
+                model_name = parts[1]
+        elif model in ["gemini", "google_ai"]:
+            provider = "google"
+        elif model == "github_copilot":
+            provider = "copilot"
+        elif model == "openai":
+            provider = "openai"
+        elif model == "anthropic":
+            provider = "anthropic"
+
+        # Credential always overrides provider if present
+        if credential_data:
+            cred_provider = get_provider_from_credential(credential_data)
+            if cred_provider and cred_provider != "unknown":
+                provider = cred_provider
+
+        # Normalize provider names
+        if provider in ["google_ai", "gemini"]:
+            provider = "google"
+        elif provider == "github_copilot":
+            provider = "copilot"
+            
+        logger.info(f"AI Generation Request: provider={provider}, model={model_name}")
+        print(f"AI Build Prompt ({provider}/{model_name}):\nSYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}", flush=True)
+
+        # Try plugins first (e.g. Antigravity)
+        plugin_response = await self._generate_with_plugins(
+            system_prompt, user_prompt, model_name, credential_data
+        )
+        if plugin_response:
+            print(f"AI Build Response (plugin):\n{plugin_response}", flush=True)
+            return self._parse_ai_response(plugin_response, current_nodes)
 
         try:
-            if provider == "gemini" or provider == "google_ai":
+            if provider == "google":
                 response_text = await self._generate_with_gemini(
-                    f"{system_prompt}\n\n{user_prompt}", credential_data=credential_data
+                    system_prompt, user_prompt, model=model_name, credential_data=credential_data
                 )
-            elif provider == "github_copilot":
+            elif provider == "copilot":
                 response_text = await self._generate_with_copilot(
-                    f"{system_prompt}\n\n{user_prompt}",
-                    credential_data=credential_data,
-                    model=model,
+                    system_prompt, user_prompt, model=model_name, credential_data=credential_data
                 )
             elif provider == "openai":
                 response_text = await self._generate_with_openai(
-                    f"{system_prompt}\n\n{user_prompt}",
-                    credential_data=credential_data,
-                    model_name=model if model != "openai" else "gpt-4",
+                    system_prompt, user_prompt, model=model_name if model_name != "openai" else "gpt-4", credential_data=credential_data
                 )
             elif provider == "anthropic":
                 response_text = await self._generate_with_anthropic(
-                    f"{system_prompt}\n\n{user_prompt}", credential_data=credential_data
+                    system_prompt, user_prompt, model=model_name if model_name != "anthropic" else "claude-3-sonnet-20240229", credential_data=credential_data
                 )
             elif provider == "openrouter":
                 response_text = await self._generate_with_openrouter(
-                    f"{system_prompt}\n\n{user_prompt}",
-                    model=model if model != "openrouter" else "deepseek/deepseek-r1",
+                    system_prompt, user_prompt,
+                    model=model_name if model_name != "openrouter" else "deepseek/deepseek-r1",
                     credential_data=credential_data,
                 )
             else:
-                # Default to openrouter if model is unknown
+                # Default to openrouter if provider is unknown but try using model name directly
                 response_text = await self._generate_with_openrouter(
-                    f"{system_prompt}\n\n{user_prompt}",
+                    system_prompt, user_prompt,
                     model=model,
                     credential_data=credential_data,
                 )
 
+            print("\n" + "="*60)
+            print(f"🚀 AI BUILD RESPONSE ({provider})")
+            print("="*60)
+            print(response_text)
+            print("="*60 + "\n", flush=True)
+
             return self._parse_ai_response(response_text, current_nodes)
         except Exception as e:
+            print(f"\n❌ AI GENERATION FAILED: {e}", flush=True)
             logger.error(f"AI generation failed: {e}")
             # Fallback to dummy JSON if AI fails during testing
             dummy_file_path = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                "dummy_json",
                 "work_flow_eg.json",
             )
             if os.path.exists(dummy_file_path):
+                print(f"⚠️ FALLBACK: Using dummy workflow from {dummy_file_path}", flush=True)
                 logger.warning("Falling back to dummy workflow example")
                 with open(dummy_file_path, "r") as f:
                     response = f.read()
@@ -426,6 +185,7 @@ class AIWorkflowService:
         self,
         current_nodes: Optional[List[dict]] = None,
         current_edges: Optional[List[dict]] = None,
+        schemas: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         current_workflow_desc = ""
         if current_nodes:
@@ -433,145 +193,106 @@ class AIWorkflowService:
                 f"Current workflow has {len(current_nodes)} nodes. Extend it."
             )
 
-        # Get available nodes from registry
-        schemas = NodeRegistry.get_all_schemas()
+        # Get available nodes from registry OR use passed schemas
+        if schemas is None:
+             schemas = NodeRegistry.get_all_schemas()
+             
         nodes_desc = (
             "AVAILABLE NODE TYPES (Use these EXACT names for 'spec.node_name'):\n"
         )
 
         for schema in schemas:
             try:
+                # Reliability: Fallback to 'name' or 'label' if 'id' is missing
+                node_id = schema.get("id") or schema.get("name") or schema.get("label")
+                if not node_id:
+                    continue
+
+                # Input Formatting
                 inputs = schema.get("inputs", [])
                 inputs_list = []
                 for i in inputs:
                     if isinstance(i, dict):
-                         inputs_list.append(f"{i.get('name')} ({i.get('type')})")
+                         i_name = i.get('name', 'param')
+                         i_type = i.get('type', 'any')
+                         inputs_list.append(f"{i_name} ({i_type})")
                 
                 inputs_desc = ", ".join(inputs_list)
+
+                # Output Formatting (CRITICAL for wiring)
+                outputs = schema.get("outputs", [])
+                outputs_list = []
+                for o in outputs:
+                    if isinstance(o, dict):
+                        o_name = o.get('name', 'result')
+                        o_type = o.get('type', 'any')
+                        outputs_list.append(f"{o_name} ({o_type})")
                 
-                name = schema.get("name")
-                kind = schema.get("type", "action")
-                description = schema.get("description", "")
+                outputs_desc = ", ".join(outputs_list)
                 
-                nodes_desc += f"- {name} (Kind: {kind})\n  Description: {description}\n"
+                kind = schema.get("type") or schema.get("category") or "action"
+                description = schema.get("description", "No description available")
+                
+                nodes_desc += f"- {node_id} (Kind: {kind})\n"
+                nodes_desc += f"  Description: {description}\n"
                 if inputs_desc:
-                    nodes_desc += f"  Config Inputs: {inputs_desc}\n"
+                    nodes_desc += f"  Expected Inputs: {inputs_desc}\n"
+                if outputs_desc:
+                    nodes_desc += f"  Produced Outputs: {outputs_desc}\n"
+                nodes_desc += "\n"
             except Exception as e:
-                logger.warning(f"Error formatting schema for AI prompt: {e}")
+                logger.warning(f"Error formatting schema for {schema.get('name')}: {e}")
                 continue
 
-        return f"""ROLE
-You are a workflow architect AI that generates strictly valid JSON workflows for a low-code automation platform.
+        return WORKFLOW_GENERATION_PROMPT_TEMPLATE.format(
+            nodes_desc=nodes_desc,
+            current_workflow_desc=current_workflow_desc
+        )
 
-📐 CORE RULES (NON-NEGOTIABLE)
-Output ONLY valid JSON
-No explanations
-No comments
-No markdown
-No trailing commas
-No extra keys
-JSON must strictly follow this top-level structure:
-{{
-  "meta": {{}},
-  "graph": {{
-    "nodes": [],
-    "edges": []
-  }},
-  "execution": {{}},
-  "observability": {{}},
-  "ai": {{}}
-}}
+    async def _generate_with_plugins(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        credential_data: Optional[Dict] = None,
+    ) -> Optional[str]:
+        """Attempt to generate using plugins."""
+        if not plugin_registry.plugins:
+            plugin_registry.initialize()
 
-Every workflow MUST include: meta, graph.nodes, graph.edges, execution, observability, ai
-
-🧠 META OBJECT RULES
-meta MUST include:
-id (string, unique, prefixed with "wf-")
-name
-description
-version (semver)
-status ("active" | "draft")
-tags (array of strings)
-owner.user_id
-owner.team_id
-created_at (ISO 8601 UTC)
-updated_at (ISO 8601 UTC)
-
-🧩 NODE RULES
-Each node MUST follow this shape:
-{{
-  "id": "node-id",
-  "kind": "trigger" | "action" | "logic",
-  "ui": {{
-    "label": "",
-    "icon": "",
-    "position": {{ "x": number, "y": number }}
-  }},
-  "spec": {{
-    "node_name": "",
-    "runtime": {{}},
-    "config": {{}},
-    OPTIONAL: "inputs": {{}},
-    OPTIONAL: "outputs": {{}},
-    OPTIONAL: "credentials_ref": "",
-    OPTIONAL: "error_policy": {{}}
-  }}
-}}
-
-Node Constraints:
-id must be unique
-kind must be correct for the node role
-node_name must be one of the AVAILABLE NODE TYPES listed below
-runtime.type must be one of: internal, code, http
-Code runtimes must specify language
-Inputs that reference other nodes MUST use mustache: {{{{node-id.outputs.key}}}}
-
-🔗 EDGE RULES
-Each edge MUST include: {{ "id": "edge-id", "source": "node-id", "target": "node-id" }}
-Graph must be acyclic
-All nodes must be connected
-Trigger nodes have no incoming edges
-
-⚙️ EXECUTION RULES
-execution MUST include: mode ("sync" | "async"), timeout_seconds, retry.max_attempts, retry.strategy, concurrency
-
-📊 OBSERVABILITY RULES
-observability MUST include ONLY these THREE BOOLEAN fields:
-- logging: true | false
-- metrics: true | false  
-- tracing: true | false
-DO NOT add nested objects or extra properties. ONLY booleans.
-
-🤖 AI METADATA RULES
-ai MUST include: generated_by, confidence, prompt_version
-
-{nodes_desc}
-
-{current_workflow_desc}
-
-🎯 FUNCTIONAL REQUIREMENTS
-When given a user intent, you must:
-Choose correct trigger(s)
-Choose correct action nodes
-Include credentials via credentials_ref
-Add error handling using error_policy
-Keep UI positions logical (left → right)
-Use realistic node names and configs
-Make the workflow production-ready
-
-❌ NEVER DO
-Do NOT invent new top-level keys
-Do NOT skip observability or execution
-Do NOT mix schemas
-Do NOT output partial workflows
-Do NOT explain anything
-
-✅ FINAL OUTPUT INSTRUCTION
-Generate one complete workflow JSON that fully satisfies the user request and strictly follows this schema.
-"""
+        for plugin in plugin_registry.list_plugins():
+            capabilities = plugin.manifest_data.get("capabilities", [])
+            # Support both list and dict formats for capabilities
+            has_capability = False
+            if isinstance(capabilities, dict) and capabilities.get("ai_provider"):
+                 has_capability = True
+            elif isinstance(capabilities, list) and "ai_provider" in capabilities:
+                 has_capability = True
+                 
+            if has_capability and plugin.backend_module:
+                try:
+                    if hasattr(plugin.backend_module, "generate"):
+                        # We pass system/user prompts separately
+                        res = await plugin.backend_module.generate(
+                            system_prompt, user_prompt, model, credential_data
+                        )
+                        if res:
+                            return res
+                except ValueError as ve:
+                    # Specific error (e.g. proxy not running), we might want to surface it if this was the intended target
+                    # If the plugin declined (returned None), we wouldn't be here.
+                    # If it raised ValueError, it probably accepted but failed.
+                    logger.warning(f"Plugin {plugin.id} raised ValueError: {ve}")
+                    # If this plugin was the ONLY way to handle this credential, we should probably raise?
+                    # But providing a generic fallback is safer.
+                    pass
+                except Exception as e:
+                    logger.warning(f"Plugin {plugin.id} generation failed: {e}")
+                    pass
+        return None
 
     async def _generate_with_copilot(
-        self, prompt: str, credential_data: Dict, model: str
+        self, system_prompt: str, user_prompt: str, model: str, credential_data: Dict
     ) -> str:
         """Generate using GitHub Copilot"""
         copilot_token = credential_data.get("data", {}).get("copilot_token")
@@ -599,9 +320,9 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a workflow automation assistant. Return only valid JSON.",
+                    "content": system_prompt,
                 },
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": user_prompt},
             ],
             "model": copilot_model,
             "temperature": 0.7,
@@ -618,52 +339,9 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             return resp.json()["choices"][0]["message"]["content"]
 
     async def _generate_with_gemini(
-        self, prompt: str, credential_data: Optional[Dict] = None
+        self, system_prompt: str, user_prompt: str, model: str = "gemini-2.0-flash", credential_data: Optional[Dict] = None
     ) -> str:
-        """Generate using Google Gemini"""
-        # Check for OAuth access token first
-        access_token = (
-            credential_data.get("data", {}).get("access_token")
-            if credential_data
-            else None
-        )
-
-        if access_token:
-            try:
-                # Ensure CLIProxyAPI is running - DO NOT auto-start
-                if not await self._is_proxy_running():
-                    raise ValueError("Google AI Plugin (Antigravity) is not running. Please start it from the Plugins page.")
-                
-                # For basic generation, we use a capable default
-                proxy_model = "gemini-3-pro-preview"
-                
-                logger.info(f"CLIProxyAPI generation request: model={proxy_model}")
-                
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(
-                        f"{CLIPROXY_URL}/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {CLIPROXY_API_KEY}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": proxy_model,
-                            "messages": [
-                                {"role": "system", "content": FUSE_SYSTEM_PROMPT},
-                                {"role": "user", "content": prompt}
-                            ],
-                        },
-                    )
-                    
-                    if resp.status_code == 200:
-                        return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-                    else:
-                        logger.error(f"CLIProxyAPI generation failed ({resp.status_code}): {resp.text}")
-                        # Fallback to standard flow below
-            except Exception as e:
-                logger.error(f"CLIProxyAPI generation exception: {e}")
-                # Fallback to standard flow below
-
+        """Generate using Google Gemini (Direct API)"""
         client = self.gemini_client
         if credential_data:
             api_key = credential_data.get("data", {}).get("api_key")
@@ -676,15 +354,16 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             )
         async with CircuitBreakers.google():
             response = client.models.generate_content(
-                model="gemini-2.0-flash", contents=prompt
+                model=model, contents=f"{system_prompt}\n\n{user_prompt}"
             )
             return response.text or ""
 
     async def _generate_with_openai(
         self,
-        prompt: str,
+        system_prompt: str,
+        user_prompt: str,
+        model: str = "gpt-4",
         credential_data: Optional[Dict] = None,
-        model_name: str = "gpt-4",
     ) -> str:
         """Generate using OpenAI GPT"""
         client = self.openai_client
@@ -700,20 +379,20 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             )
         async with CircuitBreakers.openai():
             response = client.chat.completions.create(
-                model=model_name,
+                model=model,
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a workflow automation assistant.",
+                        "content": system_prompt,
                     },
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.7,
             )
             return response.choices[0].message.content
 
     async def _generate_with_anthropic(
-        self, prompt: str, credential_data: Optional[Dict] = None
+        self, system_prompt: str, user_prompt: str, model: str = "claude-3-sonnet-20240229", credential_data: Optional[Dict] = None
     ) -> str:
         """Generate using Anthropic Claude"""
         client = self.anthropic_client
@@ -728,15 +407,17 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             )
         async with CircuitBreakers.anthropic():
             response = client.messages.create(
-                model="claude-3-sonnet-20240229",
+                model=model,
                 max_tokens=2048,
-                messages=[{"role": "user", "content": prompt}],
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
             )
             return response.content[0].text
 
     async def _generate_with_openrouter(
         self,
-        prompt: str,
+        system_prompt: str,
+        user_prompt: str,
         model: str = "deepseek/deepseek-r1",
         credential_data: Optional[Dict] = None,
     ) -> str:
@@ -762,9 +443,9 @@ Generate one complete workflow JSON that fully satisfies the user request and st
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a workflow automation assistant. Return only valid JSON.",
+                        "content": system_prompt,
                     },
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.7,
                 max_tokens=4096,
@@ -879,6 +560,37 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             logger.error(f"AI execution error: {e}")
             raise e
 
+    def _get_node_context_for_chat(self) -> str:
+        """Get a concise summary of all registered node types with their inputs for chat context."""
+        schemas = NodeRegistry.get_all_schemas()
+        
+        lines = [
+            "AVAILABLE NODE TYPES:",
+            "When helping users, you can recommend using these specific nodes if they fit the task:",
+        ]
+        
+        for schema in schemas:
+            try:
+                name = schema.get("name") or schema.get("id")
+                desc = schema.get("description", "No description")
+                kind = schema.get("type", "unknown")
+                
+                # Basic info
+                line = f"- **{name}** ({kind}): {desc}"
+                
+                # Inputs for context
+                inputs = schema.get("inputs", [])
+                if inputs:
+                    input_names = [i.get("name") for i in inputs if isinstance(i, dict) and "name" in i]
+                    if input_names:
+                        line += f" [Inputs: {', '.join(input_names)}]"
+                        
+                lines.append(line)
+            except Exception:
+                continue
+                
+        return "\n".join(lines)
+
     async def call_llm(
         self,
         messages: Optional[List[Dict[str, str]]] = None,
@@ -908,23 +620,86 @@ Generate one complete workflow JSON that fully satisfies the user request and st
         if provider == "ai_provider":
             provider = credential.get("data", {}).get("provider", "unknown").lower()
 
+        # Determine the user prompt for RAG context
+        # It might be passed as arg OR be the last message in messages list
+        current_user_prompt = user_prompt
+        if not current_user_prompt and messages:
+            last_msg = messages[-1]
+            if last_msg.get("role") == "user":
+                current_user_prompt = last_msg.get("content")
+        
         # Inject Fuse System Prompt if not already present or as a prefix
+        # We also want to inject the list of available nodes so the AI knows what's installed
+        # Update: We now use RAG to fetch only RELEVANT nodes if a user prompt is present
+        node_context = ""
+        if current_user_prompt:
+             # Use RAG to get relevant nodes
+             # We need to import inside method to avoid circular imports if any
+            try:
+                from fuse.ai.rag.manager import NodeRAGService
+                # Limit to top 20 relevant nodes for chat context
+                rag_service = NodeRAGService.get_instance()
+                # Debug: ensure index size
+                # logger.info(f"RAG Index Status: last_indexed={rag_service.last_indexed}")
+                
+                # If user is asking for "all nodes" or "available nodes", expand limit to include everything
+                # Or bypass RAG if the intent is to see the full library
+                limit_val = 20
+                if any(word in current_user_prompt.lower() for word in ["all", "every", "complete list", "available nodes"]):
+                    limit_val = 100 # Large enough for the current library
+                
+                relevant_schemas = await rag_service.retrieve_relevant_nodes(current_user_prompt, limit=limit_val)
+                # print(f"RAG Search '{current_user_prompt}' found {len(relevant_schemas)} nodes.", flush=True)
+                
+                if relevant_schemas:
+                    lines = [
+                        "RELEVANT NODE TYPES (RAG Retrieval):",
+                        "The following nodes seem relevant to the user's request. You can recommend them:",
+                    ]
+                    for schema in relevant_schemas:
+                        name = schema.get("name") or schema.get("id")
+                        desc = schema.get("description", "No description")
+                        # "type" might be missing or None. Fallback to "category" or check explicit keys.
+                        kind = schema.get("type") or schema.get("category") or "action"
+                        
+                         # Basic info
+                        line = f"- **{schema.get('label', name)}** ({kind}): {desc}"
+                        # Inputs for context
+                        inputs = schema.get("inputs", [])
+                        if inputs:
+                            input_names = [i.get("name") for i in inputs if isinstance(i, dict) and "name" in i]
+                            if input_names:
+                                line += f" [Inputs: {', '.join(input_names)}]"
+                        lines.append(line)
+                    node_context = "\n".join(lines)
+            except Exception as e:
+                logger.warning(f"RAG retrieval failed for chat: {e}")
+                # Fallback handled below
+
+        # Fallback: If no context from RAG (or no prompt), provide all nodes
+        # UPDATE: User requested to FORCE use of RAG and NOT fallback to full list
+        # if not node_context:
+        #      node_context = self._get_node_context_for_chat()
+        
         final_messages = []
         has_system = False
         for msg in messages:
             if msg["role"] == "system":
                 # Prepend our context to user's system prompt
-                new_content = f"{FUSE_SYSTEM_PROMPT}\n\nAdditional Instructions:\n{msg['content']}"
+                new_content = f"{FUSE_SYSTEM_PROMPT}\n\n{node_context}\n\nAdditional Instructions:\n{msg['content']}"
                 final_messages.append({"role": "system", "content": new_content})
                 has_system = True
             else:
                 final_messages.append(msg)
         
         if not has_system:
-            final_messages.insert(0, {"role": "system", "content": FUSE_SYSTEM_PROMPT})
+            final_messages.insert(0, {"role": "system", "content": f"{FUSE_SYSTEM_PROMPT}\n\n{node_context}"})
         
         # Update messages reference for all providers
         messages = final_messages
+
+        # Log the full prompt for debugging/transparency as requested
+        print(f"AI Prompt ({provider}/{model}):\n{json.dumps(messages, indent=2)}", flush=True)
 
         cred_data = credential.get("data", {})
         api_key = cred_data.get("api_key")
@@ -999,6 +774,11 @@ Generate one complete workflow JSON that fully satisfies the user request and st
                         
                         resp_json = resp.json()
                         content = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        print("\n" + "="*50)
+                        print(f"🗨️  AI RESPONSE ({provider}/{proxy_model})")
+                        print("="*50)
+                        print(content)
+                        print("="*50 + "\n", flush=True)
                         usage = resp_json.get("usage", {})
                         
                         return {
@@ -1026,6 +806,11 @@ Generate one complete workflow JSON that fully satisfies the user request and st
                 contents=combined_prompt,
                 config={"temperature": temperature, "max_output_tokens": max_tokens},
             )
+            print("\n" + "="*50)
+            print(f"🗨️  AI RESPONSE ({provider}/{model})")
+            print("="*50)
+            print(response.text)
+            print("="*50 + "\n", flush=True)
             return {
                 "content": response.text,
                 "usage": {
@@ -1095,8 +880,14 @@ Generate one complete workflow JSON that fully satisfies the user request and st
                     )
 
                 resp_json = resp.json()
+                content = resp_json["choices"][0]["message"]["content"]
+                print("\n" + "="*50)
+                print(f"🗨️  AI RESPONSE ({provider}/{copilot_model})")
+                print("="*50)
+                print(content)
+                print("="*50 + "\n", flush=True)
                 return {
-                    "content": resp_json["choices"][0]["message"]["content"],
+                    "content": content,
                     "usage": resp_json.get("usage", {}),
                 }
 
@@ -1120,8 +911,14 @@ Generate one complete workflow JSON that fully satisfies the user request and st
                 max_tokens=max_tokens,
                 response_format=response_format,
             )
+            ai_content = response.choices[0].message.content
+            print("\n" + "="*50)
+            print(f"🗨️  AI RESPONSE ({provider}/{model})")
+            print("="*50)
+            print(ai_content)
+            print("="*50 + "\n", flush=True)
             return {
-                "content": response.choices[0].message.content,
+                "content": ai_content,
                 "usage": {
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
@@ -1130,7 +927,6 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             }
 
         elif provider == "anthropic":
-            # ... (existing Anthropic logic) ...
             client = Anthropic(api_key=api_key) if api_key else self.anthropic_client
             if not client:
                 raise ValueError("Anthropic API key not found.")
@@ -1148,8 +944,14 @@ Generate one complete workflow JSON that fully satisfies the user request and st
                 messages=filtered_messages,
                 temperature=temperature,
             )
+            ai_content = response.content[0].text
+            print("\n" + "="*50)
+            print(f"🗨️  AI RESPONSE ({provider}/{model})")
+            print("="*50)
+            print(ai_content)
+            print("="*50 + "\n", flush=True)
             return {
-                "content": response.content[0].text,
+                "content": ai_content,
                 "usage": {
                     "prompt_tokens": response.usage.input_tokens,
                     "completion_tokens": response.usage.output_tokens,
@@ -1159,7 +961,7 @@ Generate one complete workflow JSON that fully satisfies the user request and st
             }
 
         elif provider == "ai_provider" or base_url:
-            # ... (Rest of existing logic) ...
+           
             client = OpenAI(api_key=api_key, base_url=base_url)
             response = client.chat.completions.create(
                 model=model,
@@ -1168,8 +970,14 @@ Generate one complete workflow JSON that fully satisfies the user request and st
                 max_tokens=max_tokens,
                 response_format=response_format,
             )
+            ai_content = response.choices[0].message.content
+            print("\n" + "="*50)
+            print(f"🗨️  AI RESPONSE ({provider}/{model})")
+            print("="*50)
+            print(ai_content)
+            print("="*50 + "\n", flush=True)
             return {
-                "content": response.choices[0].message.content,
+                "content": ai_content,
                 "usage": {
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,

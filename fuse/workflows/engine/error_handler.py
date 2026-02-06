@@ -29,6 +29,7 @@ class ErrorCategory(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     CONFIGURATION_ERROR = "configuration_error"
     EXTERNAL_SERVICE_ERROR = "external_service_error"
+    ENGINE_ERROR = "engine_error"
     UNKNOWN = "unknown"
 
 
@@ -89,6 +90,9 @@ class ErrorClassifier:
             "500", "502", "503", "504", "internal server error", "service unavailable",
             "slack api error", "openrouter", "openai error", "google api error", "model not found", "no endpoints found",
             "js execution error", "syntax error", "error executing code node"
+        ],
+        ErrorCategory.ENGINE_ERROR: [
+            "attributeerror", "typeerror", "recursionerror", "resolve_config", "context"
         ]
     }
     

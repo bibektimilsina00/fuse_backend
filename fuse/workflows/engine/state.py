@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -8,6 +9,8 @@ from fuse.workflows.models import Workflow, WorkflowExecution, NodeExecution
 from fuse.workflows.engine.errors import WorkflowNotFoundError, ExecutionNotFoundError
 
 from fuse.workflows.engine.constants import ExecutionStatus
+
+logger = logging.getLogger(__name__)
 
 VALID_TRANSITIONS = {
     ExecutionStatus.PENDING.value: {ExecutionStatus.RUNNING.value, ExecutionStatus.CANCELLED.value, ExecutionStatus.FAILED.value},
@@ -93,7 +96,25 @@ class WorkflowState:
         elif status in ["completed", "failed"]:
             node_execution.completed_at = datetime.utcnow()
             if result is not None:
-                node_execution.output_data = json.dumps(result)
+                # Handle V2 WorkflowItems (Pydantic models)
+                try:
+                    if isinstance(result, list):
+                        # Convert list of items to list of dicts for DB storage
+                        serializable = []
+                        for item in result:
+                            if hasattr(item, "model_dump"):
+                                serializable.append(item.model_dump(by_alias=True))
+                            elif hasattr(item, "dict"): # Pydantic v1
+                                serializable.append(item.dict(by_alias=True))
+                            else:
+                                serializable.append(item)
+                        node_execution.output_data = json.dumps(serializable)
+                    else:
+                        node_execution.output_data = json.dumps(result)
+                except Exception as e:
+                    # Fallback for complex non-serializable objects
+                    logger.warning(f"Complex serialization for node {node_execution.node_id}: {e}")
+                    node_execution.output_data = json.dumps(result, default=str)
             if error is not None:
                 node_execution.error = error
         

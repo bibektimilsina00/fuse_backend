@@ -1,0 +1,30 @@
+{
+    "id": "antigravity",
+    "name": "Antigravity AI Proxy",
+    "description": "Unlock high-tier models (Claude Sonnet 3.5/4.5, Gemini 3 Pro) using your Google AI entitlement. Proxies requests via your local machine.",
+    "version": "1.0.1",
+    "author": "Fuse Team",
+    "kind": "official",
+    "capabilities": [
+        "ai_provider",
+        "can_install",
+        "can_start",
+        "can_stop",
+        "can_login",
+        "can_uninstall"
+    ],
+    "settings_schema": {
+        "api_key": {
+            "type": "string",
+            "title": "API Key",
+            "description": "API Key for accessing the proxy (fuse-local-dev-key for dev)."
+        }
+    },
+    "oauth_config": {
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scopes": "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs",
+        "client_id": "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+        "client_secret": "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"
+    }
+}

@@ -1,0 +1,525 @@
+{
+    "meta": {
+        "id": "wf-complete-system-test-001",
+        "name": "Complete System Test Workflow",
+        "description": "Comprehensive workflow demonstrating all available node types in a functional scenario",
+        "version": "1.0.0",
+        "status": "active",
+        "tags": [
+            "system-test",
+            "complete",
+            "demonstration",
+            "all-nodes"
+        ],
+        "owner": {
+            "user_id": "user-test-001",
+            "team_id": "team-test-001"
+        },
+        "created_at": "2025-01-20T10:00:00Z",
+        "updated_at": "2025-01-20T10:00:00Z"
+    },
+    "graph": {
+        "nodes": [
+            {
+                "id": "node-trigger-manual",
+                "kind": "trigger",
+                "ui": {
+                    "label": "Manual Start",
+                    "icon": "play",
+                    "position": {
+                        "x": 100,
+                        "y": 100
+                    }
+                },
+                "spec": {
+                    "node_name": "manual.trigger",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {},
+                    "outputs": {
+                        "trigger_data": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-trigger-webhook",
+                "kind": "trigger",
+                "ui": {
+                    "label": "Webhook Receiver",
+                    "icon": "webhook",
+                    "position": {
+                        "x": 100,
+                        "y": 300
+                    }
+                },
+                "spec": {
+                    "node_name": "webhook.receive",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {
+                        "path": "/test-webhook",
+                        "method": "POST",
+                        "authentication": "none"
+                    },
+                    "outputs": {
+                        "body": "object",
+                        "headers": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-trigger-schedule",
+                "kind": "trigger",
+                "ui": {
+                    "label": "Scheduled Trigger",
+                    "icon": "clock",
+                    "position": {
+                        "x": 100,
+                        "y": 500
+                    }
+                },
+                "spec": {
+                    "node_name": "schedule.cron",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {
+                        "frequency": "hours",
+                        "interval": 6,
+                        "cron_expression": "0 */6 * * *",
+                        "timezone": "UTC"
+                    },
+                    "outputs": {
+                        "execution_time": "string"
+                    }
+                }
+            },
+            {
+                "id": "node-trigger-form",
+                "kind": "trigger",
+                "ui": {
+                    "label": "Form Submission",
+                    "icon": "form",
+                    "position": {
+                        "x": 100,
+                        "y": 700
+                    }
+                },
+                "spec": {
+                    "node_name": "form.trigger",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {},
+                    "outputs": {
+                        "form_data": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-trigger-datatable",
+                "kind": "trigger",
+                "ui": {
+                    "label": "Data Table Event",
+                    "icon": "table",
+                    "position": {
+                        "x": 100,
+                        "y": 900
+                    }
+                },
+                "spec": {
+                    "node_name": "core.data_table.trigger",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {
+                        "table_id": "table-001",
+                        "event_type": "created"
+                    },
+                    "outputs": {
+                        "row_data": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-merge-triggers",
+                "kind": "action",
+                "ui": {
+                    "label": "Merge All Triggers",
+                    "icon": "merge",
+                    "position": {
+                        "x": 400,
+                        "y": 500
+                    }
+                },
+                "spec": {
+                    "node_name": "logic.merge",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {},
+                    "inputs": {
+                        "manual": "{{node-trigger-manual.outputs.trigger_data}}",
+                        "webhook": "{{node-trigger-webhook.outputs.body}}",
+                        "schedule": "{{node-trigger-schedule.outputs.execution_time}}",
+                        "form": "{{node-trigger-form.outputs.form_data}}",
+                        "datatable": "{{node-trigger-datatable.outputs.row_data}}"
+                    },
+                    "outputs": {
+                        "merged_data": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-condition-check",
+                "kind": "action",
+                "ui": {
+                    "label": "Check Input Type",
+                    "icon": "branch",
+                    "position": {
+                        "x": 700,
+                        "y": 500
+                    }
+                },
+                "spec": {
+                    "node_name": "condition.if",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {
+                        "condition": "{{node-merge-triggers.outputs.merged_data}} != null"
+                    },
+                    "inputs": {
+                        "data": "{{node-merge-triggers.outputs.merged_data}}"
+                    },
+                    "outputs": {
+                        "true": "object",
+                        "false": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-python-process",
+                "kind": "action",
+                "ui": {
+                    "label": "Python Data Processor",
+                    "icon": "code",
+                    "position": {
+                        "x": 1000,
+                        "y": 400
+                    }
+                },
+                "spec": {
+                    "node_name": "code.python",
+                    "runtime": {
+                        "type": "code",
+                        "language": "python"
+                    },
+                    "config": {
+                        "code": "import json\nimport datetime\n\ndef handler(inputs):\n    data = inputs.get('data', {})\n    processed = {\n        'processed_at': datetime.datetime.utcnow().isoformat(),\n        'data_keys': list(data.keys()) if isinstance(data, dict) else [],\n        'data_type': type(data).__name__,\n        'record_count': len(data) if hasattr(data, '__len__') else 0\n    }\n    return {'processed': processed}"
+                    },
+                    "inputs": {
+                        "data": "{{node-condition-check.outputs.true}}"
+                    },
+                    "outputs": {
+                        "processed": "object"
+                    },
+                    "error_policy": {
+                        "on_error": "continue",
+                        "retry_attempts": 2
+                    }
+                }
+            },
+            {
+                "id": "node-ai-chat",
+                "kind": "action",
+                "ui": {
+                    "label": "AI Analysis",
+                    "icon": "brain",
+                    "position": {
+                        "x": 1300,
+                        "y": 400
+                    }
+                },
+                "spec": {
+                    "node_name": "ai.chat",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {
+                        "credential": "openai-api-key",
+                        "model": "gpt-4",
+                        "temperature": 0.7
+                    },
+                    "inputs": {
+                        "message": "Analyze this data: {{node-python-process.outputs.processed}}"
+                    },
+                    "outputs": {
+                        "response": "string"
+                    },
+                    "credentials_ref": "cred-openai-001"
+                }
+            },
+            {
+                "id": "node-ai-search",
+                "kind": "action",
+                "ui": {
+                    "label": "Web Search",
+                    "icon": "search",
+                    "position": {
+                        "x": 1600,
+                        "y": 400
+                    }
+                },
+                "spec": {
+                    "node_name": "ai.tool.search",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {
+                        "engine": "google",
+                        "max_results": 5
+                    },
+                    "inputs": {
+                        "query": "{{node-ai-chat.outputs.response}}"
+                    },
+                    "outputs": {
+                        "results": "array"
+                    }
+                }
+            },
+            {
+                "id": "node-calculator",
+                "kind": "action",
+                "ui": {
+                    "label": "Calculate Metrics",
+                    "icon": "calculator",
+                    "position": {
+                        "x": 1000,
+                        "y": 600
+                    }
+                },
+                "spec": {
+                    "node_name": "ai.tool.calculator",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {},
+                    "inputs": {
+                        "expression": "{{node-python-process.outputs.processed.record_count}} * 100"
+                    },
+                    "outputs": {
+                        "result": "number"
+                    }
+                }
+            },
+            {
+                "id": "node-delay",
+                "kind": "action",
+                "ui": {
+                    "label": "Wait 5 Seconds",
+                    "icon": "timer",
+                    "position": {
+                        "x": 1300,
+                        "y": 600
+                    }
+                },
+                "spec": {
+                    "node_name": "logic.delay",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {
+                        "seconds": 5
+                    },
+                    "inputs": {
+                        "data": "{{node-calculator.outputs.result}}"
+                    },
+                    "outputs": {
+                        "delayed_data": "number"
+                    }
+                }
+            },
+            {
+                "id": "node-pause",
+                "kind": "action",
+                "ui": {
+                    "label": "Manual Pause",
+                    "icon": "pause",
+                    "position": {
+                        "x": 1000,
+                        "y": 800
+                    }
+                },
+                "spec": {
+                    "node_name": "logic.pause",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {},
+                    "inputs": {
+                        "data": "{{node-condition-check.outputs.false}}"
+                    },
+                    "outputs": {
+                        "resumed_data": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-parallel-start",
+                "kind": "action",
+                "ui": {
+                    "label": "Parallel Execution",
+                    "icon": "parallel",
+                    "position": {
+                        "x": 1600,
+                        "y": 600
+                    }
+                },
+                "spec": {
+                    "node_name": "parallel",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {},
+                    "inputs": {
+                        "search_data": "{{node-ai-search.outputs.results}}",
+                        "delay_data": "{{node-delay.outputs.delayed_data}}"
+                    },
+                    "outputs": {
+                        "parallel_results": "object"
+                    }
+                }
+            },
+            {
+                "id": "node-utility-final",
+                "kind": "action",
+                "ui": {
+                    "label": "Final Utility",
+                    "icon": "tool",
+                    "position": {
+                        "x": 1900,
+                        "y": 500
+                    }
+                },
+                "spec": {
+                    "node_name": "utility",
+                    "runtime": {
+                        "type": "internal"
+                    },
+                    "config": {},
+                    "inputs": {
+                        "parallel_output": "{{node-parallel-start.outputs.parallel_results}}",
+                        "paused_output": "{{node-pause.outputs.resumed_data}}"
+                    },
+                    "outputs": {
+                        "final_result": "object"
+                    }
+                }
+            }
+        ],
+        "edges": [
+            {
+                "id": "edge-001",
+                "source": "node-trigger-manual",
+                "target": "node-merge-triggers"
+            },
+            {
+                "id": "edge-002",
+                "source": "node-trigger-webhook",
+                "target": "node-merge-triggers"
+            },
+            {
+                "id": "edge-003",
+                "source": "node-trigger-schedule",
+                "target": "node-merge-triggers"
+            },
+            {
+                "id": "edge-004",
+                "source": "node-trigger-form",
+                "target": "node-merge-triggers"
+            },
+            {
+                "id": "edge-005",
+                "source": "node-trigger-datatable",
+                "target": "node-merge-triggers"
+            },
+            {
+                "id": "edge-006",
+                "source": "node-merge-triggers",
+                "target": "node-condition-check"
+            },
+            {
+                "id": "edge-007",
+                "source": "node-condition-check",
+                "target": "node-python-process"
+            },
+            {
+                "id": "edge-008",
+                "source": "node-python-process",
+                "target": "node-ai-chat"
+            },
+            {
+                "id": "edge-009",
+                "source": "node-ai-chat",
+                "target": "node-ai-search"
+            },
+            {
+                "id": "edge-010",
+                "source": "node-python-process",
+                "target": "node-calculator"
+            },
+            {
+                "id": "edge-011",
+                "source": "node-calculator",
+                "target": "node-delay"
+            },
+            {
+                "id": "edge-012",
+                "source": "node-condition-check",
+                "target": "node-pause"
+            },
+            {
+                "id": "edge-013",
+                "source": "node-ai-search",
+                "target": "node-parallel-start"
+            },
+            {
+                "id": "edge-014",
+                "source": "node-delay",
+                "target": "node-parallel-start"
+            },
+            {
+                "id": "edge-015",
+                "source": "node-parallel-start",
+                "target": "node-utility-final"
+            },
+            {
+                "id": "edge-016",
+                "source": "node-pause",
+                "target": "node-utility-final"
+            }
+        ]
+    },
+    "execution": {
+        "mode": "async",
+        "timeout_seconds": 300,
+        "retry": {
+            "max_attempts": 3,
+            "strategy": "exponential_backoff"
+        },
+        "concurrency": 5
+    },
+    "observability": {
+        "logging": true,
+        "metrics": true,
+        "tracing": true
+    },
+    "ai": {
+        "generated_by": "workflow-architect-ai",
+        "confidence": 0.98,
+        "prompt_version": "1.0.0"
+    }
+}

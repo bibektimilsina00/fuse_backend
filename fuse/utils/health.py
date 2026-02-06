@@ -46,22 +46,6 @@ def check_database() -> ServiceCheck:
         return ServiceCheck(status="unhealthy", error=str(e))
 
 
-def check_redis() -> ServiceCheck:
-    """Check Redis connectivity."""
-    import time
-
-    start = time.time()
-    try:
-        from fuse.utils.redis_client import redis_client
-
-        redis_client.ping()
-        latency = (time.time() - start) * 1000
-        return ServiceCheck(status="healthy", latency_ms=round(latency, 2))
-    except Exception as e:
-        logger.error(f"Redis health check failed: {e}")
-        return ServiceCheck(status="unhealthy", error=str(e))
-
-
 @router.get("/health", response_model=HealthStatus, tags=["system"])
 def health_check() -> HealthStatus:
     """
@@ -69,7 +53,6 @@ def health_check() -> HealthStatus:
 
     Returns the health status of the application and its dependencies:
     - Database connectivity
-    - Redis connectivity
 
     Use this endpoint for:
     - Kubernetes liveness/readiness probes
@@ -77,21 +60,17 @@ def health_check() -> HealthStatus:
     - Monitoring dashboards
     """
     db_check = check_database()
-    redis_check = check_redis()
 
-    # Overall status is unhealthy if any critical service is down
+    # Overall status is unhealthy if critical service is down
     overall_status = "healthy"
     if db_check.status == "unhealthy":
         overall_status = "unhealthy"
-    elif redis_check.status == "unhealthy":
-        overall_status = "degraded"  # Redis is optional for basic operation
 
     return HealthStatus(
         status=overall_status,
         timestamp=datetime.utcnow().isoformat(),
         checks={
             "database": db_check.model_dump(),
-            "redis": redis_check.model_dump(),
         },
     )
 
@@ -124,12 +103,6 @@ def readiness_probe() -> Dict[str, str]:
 def circuit_breaker_status() -> Dict[str, Any]:
     """
     Get status of all circuit breakers.
-
-    Returns statistics for each circuit breaker including:
-    - Current state (closed, open, half_open)
-    - Failure count
-    - Success count
-    - Total calls
     """
     from fuse.utils.circuit_breaker import get_circuit_breaker_stats
 
@@ -144,12 +117,6 @@ def circuit_breaker_status() -> Dict[str, Any]:
 def feature_flags_status() -> Dict[str, Any]:
     """
     Get status of all feature flags.
-
-    Returns configuration for each feature flag including:
-    - Name and description
-    - Enabled status
-    - Rollout strategy
-    - Percentage (for percentage rollout)
     """
     from fuse.utils.feature_flags import FeatureFlags
 

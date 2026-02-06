@@ -6,6 +6,7 @@ Read data from Google Sheets.
 
 from typing import Any, Dict, List
 import logging
+import uuid
 import httpx
 from fuse.workflows.engine.context import NodeContext
 from fuse.workflows.engine.definitions import WorkflowItem
@@ -35,17 +36,29 @@ async def list_spreadsheets(context: Dict[str, Any], dependency_values: Dict[str
     }
     headers = {"Authorization": f"Bearer {token}"}
     
+    logger.info(f"Listing spreadsheets for cred: {cred_id}")
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(url, headers=headers, params=params)
             if resp.status_code == 200:
                 files = resp.json().get("files", [])
+                logger.info(f"Found {len(files)} spreadsheets")
+                
+                # Add "Create New" option at the top
+                options.append({
+                    "label": "➕ Create New Spreadsheet",
+                    "value": "NEW",
+                    "description": "Create a new blank spreadsheet"
+                })
+                
                 for f in files:
                     owner = f.get('owners', [{}])[0].get('displayName', 'Unknown')
                     desc = f"Owner: {owner} • Modified: {f.get('modifiedTime', '')[:10]}"
                     options.append({"label": f["name"], "value": f["id"], "description": desc})
+            else:
+                 logger.error(f"Google Drive API Error ({resp.status_code}): {resp.text}")
         except Exception as e:
-            logger.warning(f"Failed to list spreadsheets: {e}")
+            logger.exception(f"Failed to list spreadsheets: {e}")
             
     return options
 
@@ -66,9 +79,29 @@ async def execute(context: NodeContext) -> List[WorkflowItem]:
 
     token = cred["data"]["access_token"]
     spreadsheet_id = config.get("spreadsheet_id")
+    
+    if spreadsheet_id == "NEW":
+        # Create a new spreadsheet on the fly
+        logger.info("Creating new spreadsheet...")
+        create_url = "https://sheets.googleapis.com/v4/spreadsheets"
+        headers_post = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        payload = {
+            "properties": {
+                "title": f"New Spreadsheet {uuid.uuid4().hex[:8]}"
+            }
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(create_url, headers=headers_post, json=payload)
+            if resp.status_code == 200:
+                new_data = resp.json()
+                spreadsheet_id = new_data["spreadsheetId"]
+                logger.info(f"Created new spreadsheet: {spreadsheet_id}")
+            else:
+                raise RuntimeError(f"Failed to create spreadsheet: {resp.text}")
+                
     if not spreadsheet_id:
          raise ValueError("Spreadsheet ID is required")
-
+         
     range_name = config.get("range", "Sheet1!A1:Z50")
     
     # 2. Execute Read
