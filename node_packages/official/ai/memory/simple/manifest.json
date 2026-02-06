@@ -26,7 +26,7 @@
     "outputs": [
         {
             "name": "memory",
-            "type": "ai_memory",
+            "type": "AI_MEMORY",
             "label": "Memory",
             "description": "Memory configuration"
         }

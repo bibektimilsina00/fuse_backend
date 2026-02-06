@@ -48,7 +48,7 @@
     "outputs": [
         {
             "name": "tool",
-            "type": "ai_tool",
+            "type": "AI_TOOL",
             "label": "Tool Config",
             "description": "Tool definition for the AI Agent"
         }

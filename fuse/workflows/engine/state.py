@@ -70,12 +70,13 @@ class WorkflowState:
         session.commit()
 
     def create_node_execution(self, session: Session, node_id: str, node_type: str, input_data: Any) -> NodeExecution:
+        from fuse.utils.serialization import PydanticEncoder
         node_execution = NodeExecution(
             workflow_execution_id=self.execution_id,
             node_id=node_id,
             node_type=node_type,
             status="pending",
-            input_data=json.dumps(input_data) if input_data else None
+            input_data=json.dumps(input_data, cls=PydanticEncoder) if input_data else None
         )
         session.add(node_execution)
         session.commit()
@@ -83,40 +84,27 @@ class WorkflowState:
         return node_execution
 
     def update_node_status(self, session: Session, node_execution_id: uuid.UUID, status: str, result: Any = None, error: str = None):
+        from fuse.utils.serialization import PydanticEncoder
         node_execution = session.get(NodeExecution, node_execution_id)
         if not node_execution:
             return
         
         if not self._validate_transition(node_execution.status, status, "Node"):
             return
-
+ 
         node_execution.status = status
         if status == "running":
-            node_execution.started_at = datetime.utcnow()
+             node_execution.started_at = datetime.utcnow()
         elif status in ["completed", "failed"]:
-            node_execution.completed_at = datetime.utcnow()
-            if result is not None:
-                # Handle V2 WorkflowItems (Pydantic models)
-                try:
-                    if isinstance(result, list):
-                        # Convert list of items to list of dicts for DB storage
-                        serializable = []
-                        for item in result:
-                            if hasattr(item, "model_dump"):
-                                serializable.append(item.model_dump(by_alias=True))
-                            elif hasattr(item, "dict"): # Pydantic v1
-                                serializable.append(item.dict(by_alias=True))
-                            else:
-                                serializable.append(item)
-                        node_execution.output_data = json.dumps(serializable)
-                    else:
-                        node_execution.output_data = json.dumps(result)
-                except Exception as e:
-                    # Fallback for complex non-serializable objects
-                    logger.warning(f"Complex serialization for node {node_execution.node_id}: {e}")
-                    node_execution.output_data = json.dumps(result, default=str)
-            if error is not None:
-                node_execution.error = error
+             node_execution.completed_at = datetime.utcnow()
+             if result is not None:
+                 try:
+                     node_execution.output_data = json.dumps(result, cls=PydanticEncoder)
+                 except Exception as e:
+                     logger.warning(f"Complex serialization for node {node_execution.node_id}: {e}")
+                     node_execution.output_data = json.dumps(result, default=str)
+             if error is not None:
+                 node_execution.error = error
         
         session.add(node_execution)
         session.commit()

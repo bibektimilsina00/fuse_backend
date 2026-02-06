@@ -280,6 +280,7 @@ class NodePackageLoader:
                 "outputs": manifest.get("outputs", []),
                 "icon": manifest.get("icon"),
                 "icon_svg": manifest.get("icon_svg"),  # pass embedded SVG to frontend
+                "service": manifest.get("service", "core"),
             }
             schemas.append(schema)
         return schemas

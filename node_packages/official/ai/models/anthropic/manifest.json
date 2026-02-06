@@ -1,0 +1,66 @@
+{
+    "id": "ai.model.anthropic",
+    "name": "Anthropic Model",
+    "version": 2,
+    "nodeVersion": "1.0.0",
+    "author": "Fuse Official",
+    "category": "AI_CHAT_MODEL",
+    "service": "anthropic",
+    "connectionType": "auxiliary",
+    "description": "Configure Anthropic models (Claude 3.5 Sonnet, Haiku) for AI Agents.",
+    "tags": [
+        "ai",
+        "llm",
+        "anthropic",
+        "claude"
+    ],
+    "icon": "Brain",
+    "runtime": {
+        "type": "internal",
+        "language": "python",
+        "minPythonVersion": "3.9"
+    },
+    "inputs": [
+        {
+            "name": "credential",
+            "type": "credential",
+            "label": "Anthropic Credential",
+            "credential_type": "ai_provider",
+            "required": true
+        },
+        {
+            "name": "model",
+            "type": "select",
+            "label": "Model",
+            "required": true,
+            "options": [
+                {
+                    "label": "Claude 3.5 Sonnet",
+                    "value": "anthropic/claude-3.5-sonnet"
+                },
+                {
+                    "label": "Claude 3 Opus",
+                    "value": "anthropic/claude-3-opus"
+                },
+                {
+                    "label": "Claude 3.5 Haiku",
+                    "value": "anthropic/claude-3.5-haiku"
+                }
+            ]
+        },
+        {
+            "name": "temperature",
+            "type": "number",
+            "label": "Temperature",
+            "default": 0.7
+        }
+    ],
+    "outputs": [
+        {
+            "name": "model",
+            "type": "AI_MODEL",
+            "label": "Model Connector",
+            "description": "Connect this to an AI Agent's Chat Model input"
+        }
+    ]
+}

@@ -7,7 +7,8 @@
   "category": "TRIGGER",
   "service": "email",
   "connectionType": "flow",
-  "description": "Email Trigger node (Placeholder)",
+  "description": "Trigger workflows when a new email is received",
+  "icon": "Mail",
   "tags": [
     "trigger",
     "email"

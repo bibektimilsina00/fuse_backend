@@ -244,7 +244,7 @@
                     }
                 },
                 "spec": {
-                    "node_name": "ai.chat",
+                    "node_name": "ai.agent",
                     "runtime": {
                         "type": "internal"
                     },
@@ -291,31 +291,6 @@
                 }
             },
             {
-                "id": "node-calculator",
-                "kind": "action",
-                "ui": {
-                    "label": "Calculate Metrics",
-                    "icon": "calculator",
-                    "position": {
-                        "x": 1000,
-                        "y": 600
-                    }
-                },
-                "spec": {
-                    "node_name": "ai.tool.calculator",
-                    "runtime": {
-                        "type": "internal"
-                    },
-                    "config": {},
-                    "inputs": {
-                        "expression": "{{node-python-process.outputs.processed.record_count}} * 100"
-                    },
-                    "outputs": {
-                        "result": "number"
-                    }
-                }
-            },
-            {
                 "id": "node-delay",
                 "kind": "action",
                 "ui": {
@@ -335,7 +310,7 @@
                         "seconds": 5
                     },
                     "inputs": {
-                        "data": "{{node-calculator.outputs.result}}"
+                        "data": "{{node-python-process.outputs.processed}}"
                     },
                     "outputs": {
                         "delayed_data": "number"
@@ -467,13 +442,8 @@
                 "target": "node-ai-search"
             },
             {
-                "id": "edge-010",
-                "source": "node-python-process",
-                "target": "node-calculator"
-            },
-            {
                 "id": "edge-011",
-                "source": "node-calculator",
+                "source": "node-python-process",
                 "target": "node-delay"
             },
             {

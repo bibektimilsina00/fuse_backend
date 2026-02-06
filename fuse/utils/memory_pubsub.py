@@ -75,8 +75,14 @@ class MemoryPubSub:
 
     async def publish(self, channel: str, message: Any):
         """Publish a message to all subscribers of a channel."""
+        from fuse.utils.serialization import PydanticEncoder
+        
         if isinstance(message, (dict, list)):
-            message_str = json.dumps(message)
+            try:
+                message_str = json.dumps(message, cls=PydanticEncoder)
+            except TypeError:
+                # Fallback for truly weird objects
+                message_str = json.dumps(message, default=str)
         else:
             message_str = str(message)
 

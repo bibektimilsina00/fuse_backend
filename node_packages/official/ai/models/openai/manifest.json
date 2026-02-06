@@ -1,21 +1,20 @@
 {
-  "id": "ai.llm",
-  "name": "Text Generation (LLM)",
+  "id": "ai.model.openai",
+  "name": "OpenAI Model",
   "version": 2,
   "nodeVersion": "1.0.0",
   "author": "Fuse Official",
   "category": "AI_CHAT_MODEL",
   "service": "openai",
   "connectionType": "auxiliary",
-  "description": "GPT and other Chat Models to power AI Agents.",
+  "description": "Configure OpenAI models (GPT-4, GPT-3.5) for AI Agents.",
   "tags": [
     "ai",
     "llm",
-    "text",
-    "generation",
-    "completion"
+    "openai",
+    "gpt-4"
   ],
-  "icon": "type",
+  "icon": "Sparkles",
   "runtime": {
     "type": "internal",
     "language": "python",
@@ -25,8 +24,8 @@
     {
       "name": "credential",
       "type": "credential",
-      "label": "AI Provider",
-      "credential_type": "ai_provider,google_ai,github_copilot",
+      "label": "OpenAI Credential",
+      "credential_type": "ai_provider",
       "required": true
     },
     {
@@ -34,40 +33,36 @@
       "type": "select",
       "label": "Model",
       "required": true,
-      "dynamic_options": "get_models",
-      "dynamic_dependencies": [
-        "credential"
+      "options": [
+        {
+          "label": "GPT-4o",
+          "value": "openai/gpt-4o"
+        },
+        {
+          "label": "GPT-4o Mini",
+          "value": "openai/gpt-4o-mini"
+        },
+        {
+          "label": "GPT-4 Turbo",
+          "value": "openai/gpt-4-turbo"
+        }
       ]
-    },
-    {
-      "name": "prompt",
-      "type": "string",
-      "label": "Prompt",
-      "required": true,
-      "description": "Text prompt to send to the model"
     },
     {
       "name": "temperature",
       "type": "number",
       "label": "Temperature",
-      "default": 0.7
+      "default": 0.7,
+      "min": 0,
+      "max": 2
     }
   ],
   "outputs": [
     {
-      "name": "text",
-      "type": "string",
-      "label": "Generated Text",
-      "description": "The model's response"
+      "name": "model",
+      "type": "AI_MODEL",
+      "label": "Model Connector",
+      "description": "Connect this to an AI Agent's Chat Model input"
     }
-  ],
-  "credentials": [
-    "openai"
-  ],
-  "pricing": {
-    "model": "free",
-    "price": 0
-  },
-  "visibility": "public",
-  "license": "MIT"
+  ]
 }

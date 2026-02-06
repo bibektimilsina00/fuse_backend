@@ -43,25 +43,33 @@ class WorkflowScheduler:
             is_manual = trigger_data.get("__manual", False) if trigger_data else False
             
             for node in start_nodes:
-                # If it's a manual run, we often want to skip the trigger node and start from its children
-                # This is especially true for webhook.receive or schedule.cron nodes
-                if is_manual and (node.node_type.startswith("webhook") or \
-                                 node.node_type.startswith("schedule") or \
-                                 node.node_type.endswith(".receive") or \
-                                 node.node_type == "trigger"):
+                # Rule 4 & 6: Skip trigger nodes in manual mode and start their children
+                # Added 'manual' and '.trigger' to skip list for better coverage
+                should_skip = is_manual and (
+                    node.node_type.startswith("webhook") or \
+                    node.node_type.startswith("schedule") or \
+                    node.node_type.startswith("manual") or \
+                    node.node_type.startswith("form") or \
+                    node.node_type.startswith("core.data_table.trigger") or \
+                    node.node_type.endswith(".receive") or \
+                    node.node_type.endswith(".trigger") or \
+                    node.node_type == "trigger"
+                )
+
+                if should_skip:
                     logger.info(f"Manual Run: Skipping trigger node {node.node_id} ({node.node_type}) and starting children.")
                     
-                    # Find all edges originating from this trigger
-                    outgoing_edges = [e for e in workflow.edges if e.source == node.node_id]
-                    if not outgoing_edges:
-                        logger.warning(f"Trigger node {node.node_id} has no children to start.")
-                        # If no children, we might as well run the trigger itself to show it finished
-                        self.schedule_node(node.node_id, trigger_data)
-                    else:
-                        # Schedule all direct children
-                        for edge in outgoing_edges:
-                            logger.info(f"Manual Run: Scheduling child {edge.target} of skipped trigger.")
-                            self.schedule_node(edge.target, trigger_data)
+                    # We MUST create a dummy execution and mark as completed so the 
+                    # results_map and synchronization logic know this branch is 'done'
+                    node_execution = self.state.create_node_execution(
+                        session, node.node_id, node.node_type, trigger_data
+                    )
+                    self.state.update_node_status(
+                        session, node_execution.id, "completed", result=trigger_data
+                    )
+                    
+                    # Use handle_node_completion to trigger children WITH synchronization logic
+                    self.handle_node_completion(node_execution.id, trigger_data)
                 else:
                     self.schedule_node(node.node_id, trigger_data)
 

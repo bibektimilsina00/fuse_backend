@@ -10,8 +10,11 @@ async def execute(context: NodeContext) -> List[WorkflowItem]:
     Data Table trigger execution.
     The trigger payload is passed directly from the EventService via start_execution.
     """
-    # trigger_data comes from context.input_data for start nodes
     trigger_data = context.input_data
+    
+    if isinstance(trigger_data, list) and trigger_data and isinstance(trigger_data[0], WorkflowItem):
+        return trigger_data
+        
     if not trigger_data:
         # Fallback for manual test run
         return [WorkflowItem(json={"message": "No trigger data provided", "action": "manual"})]

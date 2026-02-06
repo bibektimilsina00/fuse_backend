@@ -1,0 +1,66 @@
+{
+    "id": "ai.model.google",
+    "name": "Google Gemini",
+    "version": 2,
+    "nodeVersion": "1.0.0",
+    "author": "Fuse Official",
+    "category": "AI_CHAT_MODEL",
+    "service": "google",
+    "connectionType": "auxiliary",
+    "description": "Configure Google Gemini models for AI Agents.",
+    "tags": [
+        "ai",
+        "llm",
+        "google",
+        "gemini"
+    ],
+    "icon": "Globe",
+    "runtime": {
+        "type": "internal",
+        "language": "python",
+        "minPythonVersion": "3.9"
+    },
+    "inputs": [
+        {
+            "name": "credential",
+            "type": "credential",
+            "label": "Google AI Credential",
+            "credential_type": "google_ai",
+            "required": true
+        },
+        {
+            "name": "model",
+            "type": "select",
+            "label": "Model",
+            "required": true,
+            "options": [
+                {
+                    "label": "Gemini 2.0 Flash",
+                    "value": "gemini-2.0-flash-exp"
+                },
+                {
+                    "label": "Gemini 1.5 Pro",
+                    "value": "gemini-1.5-pro-latest"
+                },
+                {
+                    "label": "Gemini 1.5 Flash",
+                    "value": "gemini-1.5-flash-latest"
+                }
+            ]
+        },
+        {
+            "name": "temperature",
+            "type": "number",
+            "label": "Temperature",
+            "default": 0.7
+        }
+    ],
+    "outputs": [
+        {
+            "name": "model",
+            "type": "AI_MODEL",
+            "label": "Model Connector",
+            "description": "Connect this to an AI Agent's Chat Model input"
+        }
+    ]
+}
